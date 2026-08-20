@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="hi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Camera Test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 16px; max-width:800px; }
+    video { width: 100%; max-height: 60vh; background:#000; }
+    #controls { margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; }
+    button, select { padding:8px 12px; }
+    #log { margin-top:12px; white-space:pre-wrap; background:#f6f6f6; padding:8px; border-radius:6px; }
+    canvas { display:none; }
+  </style>
+</head>
+<body>
+  <h1>Camera Test</h1>
+  <p id="note">Checking capabilities…</p>
+
+  <video id="preview" playsinline autoplay></video>
+
+  <div id="controls">
+    <select id="deviceList"></select>
+    <button id="startBtn">Start Camera</button>
+    <button id="stopBtn" disabled>Stop</button>
+    <button id="captureBtn" disabled>Capture Snapshot</button>
+  </div>
+
+  <div id="log" aria-live="polite"></div>
+  <canvas id="snap"></canvas>
+
+  <script>
+    const note = document.getElementById('note');
+    const preview = document.getElementById('preview');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const captureBtn = document.getElementById('captureBtn');
+    const deviceList = document.getElementById('deviceList');
+    const logEl = document.getElementById('log');
+    const snap = document.getElementById('snap');
+
+    let stream = null;
+
+    function log(msg) {
+      logEl.textContent = msg + "\n\n" + logEl.textContent;
+    }
+
+    async function hasSecureContext() {
+      return window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    }
+
+    async function updatePermissionStatus() {
+      if (!navigator.permissions) {
+        note.textContent = 'Permissions API not available; browser will still prompt for camera when requested.';
+        return;
+      }
+      try {
+        // Many browsers support name: 'camera' or 'microphone'; try camera
+        const status = await navigator.permissions.query({ name: 'camera' });
+        note.textContent = `Permission state (camera): ${status.state}`;
+        status.onchange = () => { note.textContent = `Permission state (camera): ${status.state}`; };
+      } catch (e) {
+        // Fallback: some browsers don't expose 'camera' in Permissions API
+        note.textContent = 'Camera permission status not exposed; browser will prompt when needed.';
+      }
+    }
+
+    async function enumerateVideoDevices() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videos = devices.filter(d => d.kind === 'videoinput');
+        deviceList.innerHTML = '';
+        videos.forEach(d => {
+          const opt = document.createElement('option');
+          opt.value = d.deviceId;
+          opt.textContent = d.label || `Camera ${deviceList.length + 1}`;
+          deviceList.appendChild(opt);
+        });
+        if (videos.length === 0) {
+          deviceList.innerHTML = '<option value="">No cameras found</option>';
+        }
+      } catch (err) {
+        log('Error enumerating devices: ' + err);
+      }
+    }
+
+    async function startCamera() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        log('getUserMedia not supported in this browser.');
+        return;
+      }
+      const deviceId = deviceList.value || undefined;
+      const constraints = { video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'environment' } };
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        preview.srcObject = stream;
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        captureBtn.disabled = false;
+        log('Camera started.');
+        // After start, update device labels (some browsers only expose labels after permission)
+        await enumerateVideoDevices();
+      } catch (err) {
+        log('Could not start camera: ' + err.name + ' — ' + err.message);
+      }
+    }
+
+    function stopCamera() {
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        preview.srcObject = null;
+        stream = null;
+      }
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      captureBtn.disabled = true;
+      log('Camera stopped.');
+    }
+
+    function captureSnapshot() {
+      if (!stream) return;
+      const videoTrack = stream.getVideoTracks()[0];
+      const settings = videoTrack.getSettings ? videoTrack.getSettings() : {};
+      const width = preview.videoWidth || settings.width || 640;
+      const height = preview.videoHeight || settings.height || 480;
+      snap.width = width;
+      snap.height = height;
+      const ctx = snap.getContext('2d');
+      ctx.drawImage(preview, 0, 0, width, height);
+      const dataUrl = snap.toDataURL('image/png');
+      // open snapshot in new tab
+      const w = window.open();
+      if (w) {
+        w.document.body.style.margin = '0';
+        const img = w.document.createElement('img');
+        img.src = dataUrl;
+        img.style.maxWidth = '100%';
+        w.document.title = 'Snapshot';
+        w.document.body.appendChild(img);
+      } else {
+        log('Popup blocked; cannot open snapshot in new tab.');
+      }
+    }
+
+    // Button events
+    startBtn.addEventListener('click', startCamera);
+    stopBtn.addEventListener('click', stopCamera);
+    captureBtn.addEventListener('click', captureSnapshot);
+    deviceList.addEventListener('change', () => {
+      // auto-restart with selected device if running
+      if (stream) {
+        stopCamera();
+        startCamera();
+      }
+    });
+
+    // Init
+    (async () => {
+      if (!await hasSecureContext()) {
+        note.textContent = 'This page should be served over HTTPS (or run on localhost) to allow camera access in most browsers.';
+      } else {
+        note.textContent = 'Secure context: OK. Click "Start Camera" to allow access.';
+      }
+      await updatePermissionStatus();
+      await enumerateVideoDevices();
+      log('Ready. Use "Start Camera" to request permission and view your camera.');
+    })();
+  </script>
+</body>
+</html>
