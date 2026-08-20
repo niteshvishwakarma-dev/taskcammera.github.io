@@ -17,7 +17,7 @@
   <h1>Camera Test</h1>
   <p id="note">Checking capabilities…</p>
 
-  <video id="preview" playsinline autoplay></video>
+  <video id="preview" playsinline autoplay muted></video>
 
   <div id="controls">
     <select id="deviceList"></select>
@@ -55,25 +55,25 @@
         return;
       }
       try {
-        // Many browsers support name: 'camera' or 'microphone'; try camera
+        // Many browsers don't expose 'camera' so try 'camera' then fallback
         const status = await navigator.permissions.query({ name: 'camera' });
         note.textContent = `Permission state (camera): ${status.state}`;
         status.onchange = () => { note.textContent = `Permission state (camera): ${status.state}`; };
       } catch (e) {
-        // Fallback: some browsers don't expose 'camera' in Permissions API
         note.textContent = 'Camera permission status not exposed; browser will prompt when needed.';
       }
     }
 
     async function enumerateVideoDevices() {
       try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videos = devices.filter(d => d.kind === 'videoinput');
         deviceList.innerHTML = '';
-        videos.forEach(d => {
+        videos.forEach((d, i) => {
           const opt = document.createElement('option');
           opt.value = d.deviceId;
-          opt.textContent = d.label || `Camera ${deviceList.length + 1}`;
+          opt.textContent = d.label || `Camera ${i + 1}`;
           deviceList.appendChild(opt);
         });
         if (videos.length === 0) {
@@ -86,14 +86,23 @@
 
     async function startCamera() {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        log('getUserMedia not supported in this browser.');
+        log('getUserMedia not supported in this browser. Try a modern browser (Chrome, Edge, Firefox, Safari).');
         return;
       }
       const deviceId = deviceList.value || undefined;
-      const constraints = { video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'environment' } };
+      // Do not request audio to avoid extra permission prompts / autoplay restrictions
+      const constraints = { video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } } };
       try {
         stream = await navigator.mediaDevices.getUserMedia(constraints);
         preview.srcObject = stream;
+        // Muting the video helps mobile browsers allow autoplay after permission
+        preview.muted = true;
+        try {
+          await preview.play();
+        } catch (playErr) {
+          // Some browsers still block autoplay; user can tap the video to start
+          log('Preview play was blocked by browser policy: ' + (playErr && playErr.message));
+        }
         startBtn.disabled = true;
         stopBtn.disabled = false;
         captureBtn.disabled = false;
@@ -101,7 +110,14 @@
         // After start, update device labels (some browsers only expose labels after permission)
         await enumerateVideoDevices();
       } catch (err) {
-        log('Could not start camera: ' + err.name + ' — ' + err.message);
+        // Provide clearer messages for common errors
+        if (err && err.name === 'NotAllowedError') {
+          log('Permission denied: please allow camera access for this site.');
+        } else if (err && err.name === 'NotFoundError') {
+          log('No camera found that matches the requested constraints.');
+        } else {
+          log('Could not start camera: ' + (err && (err.name + ' — ' + err.message)));
+        }
       }
     }
 
